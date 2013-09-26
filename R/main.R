@@ -1,24 +1,29 @@
+# Create an environment in the package that will hold
+# data sent to the workers by the "worker.init" function
+# and used by the "worker" function.
+.Cache <- new.env(parent=emptyenv())
+
 worker <- function(cv.ind, minbuck, cut.off.growth, MPD, missing,
                    loss.function, control=DSA.control(),
                    # XXX default values?
                    wt.method, brier.vec, cox.vec, IBS.wt) {
-  x <- data.frame(get('G.x')[get('G.grp.delt') != cv.ind,])
-  y <- if (inherits(get('G.y'), "Surv"))
-    get('G.y')[get('G.grp.delt') != cv.ind,]
+  x <- data.frame(.Cache$G.x[.Cache$G.grp.delt != cv.ind,])
+  y <- if (inherits(.Cache$G.y, "Surv"))
+    .Cache$G.y[.Cache$G.grp.delt != cv.ind,]
   else
-    get('G.y')[get('G.grp.delt') != cv.ind]
-  wt <- get('G.wt')[get('G.grp.delt') != cv.ind]
+    .Cache$G.y[.Cache$G.grp.delt != cv.ind]
+  wt <- .Cache$G.wt[.Cache$G.grp.delt != cv.ind]
 
-  x.test <- data.frame(get('G.x')[get('G.grp.delt') == cv.ind,])
-  y.test <- if (inherits(get('G.y'), "Surv"))
-    get('G.y')[get('G.grp.delt') == cv.ind,]
+  x.test <- data.frame(.Cache$G.x[.Cache$G.grp.delt == cv.ind,])
+  y.test <- if (inherits(.Cache$G.y, "Surv"))
+    .Cache$G.y[.Cache$G.grp.delt == cv.ind,]
   else
-    get('G.y')[get('G.grp.delt') == cv.ind]
-  wt.test <- get('G.wt')[get('G.grp.delt') == cv.ind]
+    .Cache$G.y[.Cache$G.grp.delt == cv.ind]
+  wt.test <- .Cache$G.wt[.Cache$G.grp.delt == cv.ind]
 
   ## Create weights for IPCW using assign.surv.wts function and the
   ## chosen wt.method
-  if (inherits(get('G.y'),"Surv") & loss.function == "IPCW") {
+  if (inherits(.Cache$G.y, "Surv") & loss.function == "IPCW") {
     wt <- assign.surv.wts(x, y=Surv(y[,1], y[,2]),
         opts=list(loss.fx=loss.function, wt.method=wt.method),cox.vec=cox.vec)
     wt.test <- assign.surv.wts(x=x.test, y=Surv(y.test[,1],y.test[,2]),
@@ -79,11 +84,11 @@ worker <- function(cv.ind, minbuck, cut.off.growth, MPD, missing,
 worker.init <- function(lib.loc, a, b, c, d) {
   ## XXX Why was this commented out?
   library(partDSA, lib.loc=lib.loc)
-  library(survival)
-  assign('G.x', a, globalenv())
-  assign('G.grp.delt', b, globalenv())
-  assign('G.wt', c, globalenv())
-  assign('G.y', d, globalenv())
+  #library(survival)  --- listed under dependencies for partDSA
+  assign('G.x', a, pos=.Cache)
+  assign('G.grp.delt', b, pos=.Cache)
+  assign('G.wt', c, pos=.Cache)
+  assign('G.y', d, pos=.Cache)
   invisible(NULL)
 }
 
@@ -174,20 +179,38 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
       y.test <- ConvertFactorsToNumeric(y.test.original)
     }
 
-    if (missing(sleigh) || ! require('nws',quietly=TRUE)) {
+    if (missing(sleigh) || ! require('parallel',quietly=TRUE) ||
+        (is.numeric(sleigh) && sleigh <= 1)) {
+      # Use lapply
       worker.init(lib.loc=NULL, x, -1, wt, y)
       tree.results <- lapply(1:control$leafy.num.trees, worker.leafy, minbuck,
                              cut.off.growth, MPD, missing, loss.function,
                              x, y, wt, x.test, y.test, wt.test, control,
                              wt.method, brier.vec, cox.vec, IBS.wt)
     } else {
-      r <- eachWorker(sleigh, worker.init, lib.loc=NULL, x, -1, wt, y)
-      lapply(r, function(e) if (inherits(e,'error')) stop(e))
-      tree.results <- eachElem(sleigh,worker.leafy,1:control$leafy.num.trees,
-                               list(minbuck, cut.off.growth, MPD, missing,
-                                    loss.function, x, y, wt, x.test, y.test,
-                                    wt.test, control, wt.method, brier.vec, cox.vec, IBS.wt))
-      lapply(tree.results,function(e) if(inherits(e,'error')) stop(e))
+      if (! is.numeric(sleigh) || .Platform$OS.type == 'windows') {
+        # Use clusterCall and clusterApplyLB
+	cl <- if (is.numeric(sleigh))
+          makePSOCKcluster(rep('localhost', sleigh))
+        else
+          sleigh
+        clusterCall(cl, worker.init, lib.loc=NULL, x, -1, wt, y)
+        tree.results <- clusterApplyLB(cl,1:control$leafy.num.trees,worker.leafy,
+                                 minbuck, cut.off.growth, MPD, missing,
+                                 loss.function, x, y, wt, x.test, y.test,
+                                 wt.test, control, wt.method, brier.vec, cox.vec,
+                                 IBS.wt)
+        if (is.numeric(sleigh))
+          stopCluster(cl)
+      } else {
+        # Use mclapply
+        worker.init(lib.loc=NULL, x, -1, wt, y)
+        tree.results <- mclapply(1:control$leafy.num.trees, worker.leafy, minbuck,
+                                 cut.off.growth, MPD, missing, loss.function,
+                                 x, y, wt, x.test, y.test, wt.test, control,
+                                 wt.method, brier.vec, cox.vec, IBS.wt,
+                                 mc.cores=sleigh)
+      }
     }
 
     predicted.values.by.tree <- lapply(tree.results,'[[',1)
@@ -283,20 +306,35 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
         grp.delt <- sample(rep(1:vfold, length=nrow(x)), nrow(x), replace=F)
       }
 
-      if (missing(sleigh) || ! require('nws', quietly=TRUE)) {
+      if (missing(sleigh) || ! require('parallel', quietly=TRUE) ||
+          (is.numeric(sleigh) && sleigh <= 1)) {
+        # Use lapply
         worker.init(lib.loc=NULL, x, grp.delt, wt, y)
         test.risk.DSA <- lapply(1:vfold, worker, minbuck, cut.off.growth,
                                 MPD, missing, loss.function, control,
                                 wt.method, brier.vec, cox.vec, IBS.wt)
       } else {
-        r <- eachWorker(sleigh, worker.init, lib.loc=NULL, x, grp.delt, wt, y)
-        lapply(r, function(e) if (inherits(e, 'error')) stop(e))
-        test.risk.DSA <- eachElem(sleigh, worker, 1:vfold,
-                                  list(minbuck, cut.off.growth, MPD,
-                                       missing, loss.function, control,
-                                       wt.method, brier.vec, cox.vec, IBS.wt))
-        # test if we got any errors
-        lapply(test.risk.DSA, function(e) if (inherits(e, 'error')) stop(e))
+        if (! is.numeric(sleigh) || .Platform$OS.type == 'windows') {
+          # Use clusterCall and clusterApplyLB
+          cl <- if (is.numeric(sleigh))
+            makePSOCKcluster(rep('localhost', sleigh))
+          else
+            sleigh
+          clusterCall(cl, worker.init, lib.loc=NULL, x, grp.delt, wt, y)
+          test.risk.DSA <- clusterApplyLB(cl, 1:vfold, worker,
+                                          minbuck, cut.off.growth,
+                                          MPD, missing, loss.function, control,
+                                          wt.method, brier.vec, cox.vec, IBS.wt)
+          if (is.numeric(sleigh))
+            stopCluster(cl)
+        } else {
+          # Use mclapply
+          worker.init(lib.loc=NULL, x, grp.delt, wt, y)
+          test.risk.DSA <- mclapply(1:vfold, worker, minbuck, cut.off.growth,
+                                    MPD, missing, loss.function, control,
+                                    wt.method, brier.vec, cox.vec, IBS.wt,
+                                    mc.cores=sleigh)
+        }
       }
 
       ## DSA - after get the cv-validation results back - find
