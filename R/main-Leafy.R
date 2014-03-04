@@ -1,14 +1,20 @@
 worker.leafy <- function(tree.num, minbuck, cut.off.growth, MPD, missing,
                    loss.function,x.in,y.in,wt.in,x.test.in,y.test.in,wt.test.in,control,
-                   wt.method, brier.vec) {
+                   wt.method, brier.vec,cox.vec,IBS.wt) {
   ## This was used for testing, presumably
   # set.seed(tree.num)   # delete this later   
                    	
   # Set up bootstrap sample
-  
-  
-  obs.in.bag <- sample(1:(dim(x.in)[1]),dim(x.in)[1],T)
-    
+
+  #Now subsample unless leafy.subsample=0
+
+  if(control$leafy.subsample>0){
+    number.to.sample <- round(control$leafy.subsample*dim(x.in)[1])
+    obs.in.bag <- sample(1:(dim(x.in)[1]),number.to.sample,replace=FALSE)
+  }else{
+    obs.in.bag <- sample(1:(dim(x.in)[1]),dim(x.in)[1],replace=TRUE)
+  }
+
   x<-data.frame(x.in[obs.in.bag,])
   y<-y.in[obs.in.bag]
   wt <- wt.in[obs.in.bag]
@@ -23,13 +29,12 @@ worker.leafy <- function(tree.num, minbuck, cut.off.growth, MPD, missing,
   y.oob <- y.in[list.of.oob.elements]
   wt.oob <- wt.in[list.of.oob.elements]
   
-  
   ## this calls a function in algAlone2.R
   ty <- rss.dsa(x=x, y=y, wt=wt, minbuck=minbuck,
                 cut.off.growth=cut.off.growth, MPD=MPD,missing=missing,
                 loss.function=loss.function,control = control,
                 wt.method=wt.method, brier.vec=brier.vec)
-  
+
   rowmin <- function(matrix,row){
   	if(length(which(matrix[row,]!=0))==0){
   		dim(matrix)[2]
@@ -63,7 +68,6 @@ worker.leafy <- function(tree.num, minbuck, cut.off.growth, MPD, missing,
   }
   x.oob<-impute.test(x=x.in[list.of.training.set.elements,], y=y.in[list.of.training.set.elements], 
   					x.test = x.oob, missing = missing)
-  
   
   pred.oob.DSA <- predict(ty, x.oob)  
   if(!identical(x.in, x.test.in)){
