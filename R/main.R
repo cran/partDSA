@@ -3,7 +3,7 @@
 # and used by the "worker" function.
 .Cache <- new.env(parent=emptyenv())
 
-worker <- function(cv.ind, minbuck, cut.off.growth, MPD, missing,
+worker <- function(cv.ind, minsplit, minbuck, cut.off.growth, MPD, missing,
                    loss.function, control=DSA.control(),
                    # XXX default values?
                    wt.method, brier.vec, cox.vec, IBS.wt) {
@@ -50,7 +50,7 @@ worker <- function(cv.ind, minbuck, cut.off.growth, MPD, missing,
   }
 
   ## this calls a function in algAlone2.R
-  ty <- rss.dsa(x=x, y=y, wt=wt, minbuck=minbuck,
+  ty <- rss.dsa(x=x, y=y, wt=wt, minsplit=minsplit, minbuck=minbuck,
                 cut.off.growth=cut.off.growth, MPD=MPD,missing=missing,
                 loss.function=loss.function, control=control,
                 wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)
@@ -98,6 +98,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
   ## the number of the fold for each observation
   missing <- control$missing
   vfold <- control$vfold
+  minsplit <- control$minsplit
   minbuck <- control$minbuck
   cut.off.growth <- control$cut.off.growth
   MPD <- control$MPD
@@ -110,7 +111,10 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
   cox.vec <- control$cox.vec
   IBS.wt <- control$IBS.wt
   
-  
+  if(control$boost == 1 && is.factor(y)){
+     stop(paste("Y can only be numeric."))
+  }
+
   if( inherits(y, "Surv") && loss.function == "default" ){
       loss.function <- "IPCW"
   }
@@ -181,11 +185,11 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
       y.test <- ConvertFactorsToNumeric(y.test.original)
     }
 
-    if (missing(sleigh) || ! require('parallel',quietly=TRUE) ||
+    if (missing(sleigh) || ! requireNamespace('parallel',quietly=TRUE) ||
         (is.numeric(sleigh) && sleigh <= 1)) {
       # Use lapply
       worker.init(lib.loc=NULL, x, -1, wt, y)
-      tree.results <- lapply(1:control$leafy.num.trees, worker.leafy, minbuck=minbuck,
+      tree.results <- lapply(1:control$leafy.num.trees, worker.leafy, minsplit=minsplit, minbuck=minbuck,
                              cut.off.growth=cut.off.growth, MPD=MPD, missing=missing,
                              loss.function=loss.function,x.in=x, y.in=y, wt.in=wt, x.test.in=x.test,
                              y.test.in=y.test, wt.test.in=wt.test,control=control,wt.method=wt.method,
@@ -198,7 +202,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
         else
           sleigh
         clusterCall(cl, worker.init, lib.loc=NULL, x, -1, wt, y)
-        tree.results <- clusterApplyLB(cl,1:control$leafy.num.trees,worker.leafy,minbuck=minbuck,
+        tree.results <- clusterApplyLB(cl,1:control$leafy.num.trees,worker.leafy,minsplit=minsplit,minbuck=minbuck,
                                        cut.off.growth=cut.off.growth, MPD=MPD, missing=missing,
                                        loss.function=loss.function,x.in=x, y.in=y, wt.in=wt, x.test.in=x.test,
                                        y.test.in=y.test, wt.test.in=wt.test,control=control,wt.method=wt.method,
@@ -208,7 +212,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
       } else {
         # Use mclapply
         worker.init(lib.loc=NULL, x, -1, wt, y)
-        tree.results <- mclapply(1:control$leafy.num.trees, worker.leafy, minbuck=minbuck,
+        tree.results <- mclapply(1:control$leafy.num.trees, worker.leafy, minsplit=minsplit, minbuck=minbuck,
                                  cut.off.growth=cut.off.growth, MPD=MPD, missing=missing,
                                  loss.function=loss.function,x.in=x, y.in=y, wt.in=wt, x.test.in=x.test,
                                  y.test.in=y.test, wt.test.in=wt.test,control=control,wt.method=wt.method,
@@ -221,7 +225,11 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
     predicted.test.set.values.by.tree<-lapply(tree.results,'[[',3)
     first.partition.with.var.by.tree<-lapply(tree.results,'[[',4)
     variable.penetrance.by.tree<-lapply(tree.results,'[[',5)
-
+    #For Breiman importance, should be a list of n by p matrices
+    predicted.values.by.tree.permuted <- lapply(tree.results,'[[',6)
+    #For partial derivative importance, should be a list of p vectors
+    partial.derivative.error <- lapply(tree.results,'[[',7)
+    
     first.partition.with.var.on.average <- Reduce("+", first.partition.with.var.by.tree) /
                                            length(first.partition.with.var.by.tree)
     var.importance.list<-as.list(first.partition.with.var.on.average)
@@ -229,12 +237,15 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
     variable.penetrance.on.average <- Reduce("+", variable.penetrance.by.tree) /
                                       length(variable.penetrance.by.tree)
     var.penetrance.list <- as.list(variable.penetrance.on.average)
-
+    partial.derivative.on.average <- Reduce("+", partial.derivative.error) / length(partial.derivative.error)
+    partial.derivative.rank <- rank(-1*(partial.derivative.on.average),ties.method="min")
+    
     if (is.factor(y)) { #this is the categorical case
       categorical.results <- categorical.predictions(predicted.values.by.tree=predicted.values.by.tree,
                                                      predicted.test.set.values.by.tree=predicted.test.set.values.by.tree,
                                                      y=y, y.test=y.test, x=x, x.test=x.test,
-                                                     y.original=y.original, y.test.original=y.test.original)
+                                                     y.original=y.original, y.test.original=y.test.original,
+                                                     predicted.values.by.tree.permuted=predicted.values.by.tree.permuted)
     } else if (inherits(y, "Surv")) {
       # This will be for survival
       stop('not implemented yet')
@@ -242,7 +253,8 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
       # must be the numeric case
       numerical.results <- numerical.predictions(predicted.values.by.tree=predicted.values.by.tree,
                                                  predicted.test.set.values.by.tree=predicted.test.set.values.by.tree,
-                                                 y=y, y.test=y.test, x=x, x.test=x.test, wt=wt, wt.test=wt.test)
+                                                 y=y, y.test=y.test, x=x, x.test=x.test, wt=wt, wt.test=wt.test,
+                                                 predicted.values.by.tree.permuted)
     }
 
     if (is.null(names(x))) {
@@ -276,16 +288,60 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
                       numerical.results[[4]][[2]],
                       var.importance.list,
                       var.penetrance.list,
-                      tree.prediction.rules)
+                      tree.prediction.rules,
+                      numerical.results[[5]][[2]],
+                      numerical.results[[6]][[2]],
+                      partial.derivative.on.average,
+                      partial.derivative.rank)
 
       names(results) <- list("Training.Set.Error", "Predicted.Training.Set.Values",
                              "Predicted.Test.Set.Values", "Test.Set.Error", "VIMP",
-                             "Variable.Penetrance", "Prediction.Rules")
+                             "Variable.Penetrance", "Prediction.Rules","Breiman.Training.Error",
+                             "Breiman.Rank","Partial.Derivative.Error","Partial.Derivative.Rank")
     }
     class(results)<-('LeafyDSA')
-  } else {
+  } else if(control$boost == 1 ){  #Start Boosting
+  	
+  		boost.num.trees<-control$boost.num.trees
+  		boost.out <- matrix(0,nrow=nrow(x),ncol=boost.num.trees)
+  		boost.models<-vector("list",boost.num.trees)
+  		resids.sum <- NULL
+  		resids<-y
+  		for(i in 1:boost.num.trees){
+  			boost.models[[i]]<-rss.dsa(x=x, y=resids, wt=wt, minsplit=minsplit, minbuck=minbuck,
+                        cut.off.growth=cut.off.growth, MPD=MPD,missing=missing,
+                        loss.function=loss.function, control=control,
+                        wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)
+         boost.models[[i]]$pred.test.set.DSA <- predict(boost.models[[i]], x)
+			boost.out[,i]<-boost.models[[i]]$pred.test.set.DSA[,cut.off.growth]
+			resids <- (resids - boost.out[,i])
+			resids.sum[i] <- sum(resids^2)
+  		}
+  		### Predicted Values
+  		y.hat.train <- y - resids
+  		if(!is.null(x.test)){  # For future prediction
+  			y.hat.test<-rep(0,nrow=x.test)
+  			test.set.error <- NULL
+  			for(i in 1:boost.num.trees){
+  				 y.hat.test <- y.hat.test +  predict(boost.models[[i]], x.test)[,cut.off.growth]
+  				 test.set.error[i]<-sum((y.test - y.hat.test)^2)
+  			}
+  		}
+  	   results <- list(resids.sum,
+                      boost.models,
+                      y.hat.train,
+                      y.hat.test,
+                      test.set.error,
+                      test.set.error[boost.num.trees])
+
+      names(results) <- list("Training.Set.Errors", "Training.Set.Models", 
+      								 "Predicted.Train.Set.Values", 
+                             "Predicted.Test.Set.Values", "Test.Set.Errors", "Final.Test.Set.Error")
+      class(results)<-('BoostDSA')
+
+    } else {   # Begin partDSA
     # Only do cross validation if vfold > 1
-    if (vfold > 1) {
+    if (vfold > 1) {  #partDSA with cross-validation	
       ## Set up cross validation. For the case of a categorical outcome variable,
       ## make sure all folds have the same proportions of levels.
       ## For survival, to create CV groups, use the same code as for a factor
@@ -309,11 +365,11 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
         grp.delt <- sample(rep(1:vfold, length=nrow(x)), nrow(x), replace=F)
       }
 
-      if (missing(sleigh) || ! require('parallel', quietly=TRUE) ||
+      if (missing(sleigh) || ! requireNamespace('parallel', quietly=TRUE) ||
           (is.numeric(sleigh) && sleigh <= 1)) {
         # Use lapply
         worker.init(lib.loc=NULL, x, grp.delt, wt, y)
-        test.risk.DSA <- lapply(1:vfold, worker, minbuck=minbuck, cut.off.growth=cut.off.growth,
+        test.risk.DSA <- lapply(1:vfold, worker, minsplit=minsplit, minbuck=minbuck, cut.off.growth=cut.off.growth,
                                 MPD=MPD, missing=missing, loss.function=loss.function, control=control,
                                 wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)
       } else {
@@ -324,7 +380,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
           else
             sleigh
           clusterCall(cl, worker.init, lib.loc=NULL, x, grp.delt, wt, y)
-          test.risk.DSA <- clusterApplyLB(cl, 1:vfold, worker,minbuck=minbuck, cut.off.growth=cut.off.growth,
+          test.risk.DSA <- clusterApplyLB(cl, 1:vfold, worker,minsplit=minsplit,minbuck=minbuck, cut.off.growth=cut.off.growth,
                                           MPD=MPD, missing=missing, loss.function=loss.function, control=control,
                                           wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)
           if (is.numeric(sleigh))
@@ -332,7 +388,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
         } else {
           # Use mclapply
           worker.init(lib.loc=NULL, x, grp.delt, wt, y)
-          test.risk.DSA <- mclapply(1:vfold, worker,minbuck=minbuck, cut.off.growth=cut.off.growth,
+          test.risk.DSA <- mclapply(1:vfold, worker,minsplit=minsplit,minbuck=minbuck, cut.off.growth=cut.off.growth,
                                     MPD=MPD, missing=missing, loss.function=loss.function, control=control,
                                     wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt,
                                     mc.cores=sleigh)
@@ -341,14 +397,10 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
 
       ## DSA - after get the cv-validation results back - find
       ## the  number of partitions that minimizes the RSS
-      ## (residual sum of squares). 4 different measures of this.
-      ## can look at overall minimum (or 1se+overall min or the
-      ## first minimum (or 1se+first min). These 4 numbers are in
-      ## pick.k.as.min.DSA, pick.k.se1.DSA, pick.k.DSA, get.k.DSA
 
       cv.risks <- do.call('cbind', test.risk.DSA)
-      mean.cv.risk.DSA <- apply(cv.risks, 1, mean, na.rm=T)
-      sd.cv.risk <- apply(cv.risks, 1, sd, na.rm=T)
+      mean.cv.risk.DSA <- apply(cv.risks, 1, mean, na.rm=TRUE)
+      sd.cv.risk <- apply(cv.risks, 1, sd, na.rm=TRUE)
     } else {
       mean.cv.risk.DSA <- NULL
       sd.cv.risk <- NULL
@@ -380,7 +432,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
     }
 
     ## now go back with test set and full training set and get predictions
-    test2.ty <- rss.dsa(x=x, y=y, wt=wt, minbuck=minbuck,
+    test2.ty <- rss.dsa(x=x, y=y, wt=wt,minsplit=minsplit, minbuck=minbuck,
                         cut.off.growth=cut.off.growth, MPD=MPD,missing=missing,
                         loss.function=loss.function, control=control,
                         wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)

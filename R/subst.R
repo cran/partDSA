@@ -5,11 +5,11 @@
 ###                                                                #
 ####################################################################
 
-subst <- function(bas.fx, y, wt, dat, minbuck, real.LIST, opts, x.temp,
+subst <- function(bas.fx, y, wt, dat, minsplit, minbuck, real.LIST, opts, x.temp,
                   is.num, control) {
   ## first call add - to find best split for each basis function
   try.add <- addon(bas.fx=bas.fx, y=y, wt=wt, dat=dat,
-                   minbuck=minbuck, real.LIST=real.LIST, opts=opts,
+                   minsplit=minsplit, minbuck=minbuck, real.LIST=real.LIST, opts=opts,
                    x.temp=x.temp, is.num=is.num, control=control)
 
   ## situation 1 - some variables cannot be split
@@ -124,7 +124,7 @@ bfs.to.combine <- function(bas.fx, y, wt, opts, var1, var2) {
   for(ind in 1:6)
     all.combo[ind] <- all.poss.subs[[ind]][[1]]
 
-  index.min <- min(all.combo, na.rm=T)
+  index.min <- min(all.combo, na.rm=TRUE)
   pick.sub <- c(1:6)[all.combo == index.min][1]
   bf.2 <- all.poss.subs[[pick.sub]][[3]]
   bf.1 <- all.poss.subs[[pick.sub]][[2]]
