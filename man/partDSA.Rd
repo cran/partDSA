@@ -23,7 +23,7 @@ DSA.control(vfold=10, minsplit = 20, minbuck=round(minsplit/3),
                         loss.function="default", wt.method="KM", brier.vec=NULL,
                         leafy=0, leafy.random.num.variables.per.split=4,
                         leafy.num.trees=50, leafy.subsample=0, save.input=FALSE, 
-                        boost=0, boost.num.trees=50, cox.vec=NULL, IBS.wt=NULL)
+                        boost=0, boost.rounds=100, cox.vec=NULL,IBS.wt=NULL, partial=NULL)
 }
 \arguments{
 \item{x}{The matrix or data frame of predictor variables for the training set,
@@ -80,9 +80,10 @@ DSA.control(vfold=10, minsplit = 20, minbuck=round(minsplit/3),
 \item{brier.vec}{Not documented yet.}
 \item{cox.vec}{Not documented yet.}
 \item{IBS.wt}{Not documented yet.}
-\item{leafy}{Not documented yet.}
-\item{leafy.random.num.variables.per.split}{Not documented yet.}
-\item{leafy.num.trees}{Not documented yet.}
+\item{leafy}{Set to 1 to run Bagged partDSA.}
+\item{leafy.random.num.variables.per.split}{Number of variables to use
+        if utilizing random variable selection in Bagged partDSA.}
+\item{leafy.num.trees}{Numbed in trees in Bagged partDSA.  Default is 50.}
 \item{leafy.subsample}{Numeric value between 0 and 1.  The value 0 is
   used for bootstrap sampling (sampling witht replacement).  If the
   value is greater than 0, it corresponds to the proportion of samples
@@ -90,8 +91,11 @@ DSA.control(vfold=10, minsplit = 20, minbuck=round(minsplit/3),
 \item{save.input}{Indicates if \code{x} and \code{y} should be saved
  in the object returned by partDSA.  If \code{FALSE}, \code{x} and \code{y}
  are set to \code{NULL}.  The default value is \code{FALSE}.}
-\item{boost}{Not documented yet.}
-\item{boost.num.trees}{Not documented yet.}
+\item{boost}{Set to 1 to run Boosted partDSA.}
+\item{boost.rounds}{Maximum number of rounds of boosting.  Default is
+100.}
+\item{partial}{If set to "deciles," step partial importance is computed
+        on deciles of data rather than actual data.}
 }
 \details{
 \code{missing} set to "no" indicates that there is no missing data and

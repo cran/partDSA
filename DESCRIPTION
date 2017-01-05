@@ -1,7 +1,7 @@
 Package: partDSA
 Type: Package
 Title: Partitioning Using Deletion, Substitution, and Addition Moves
-Version: 0.9.10
+Version: 0.9.14
 Author: Annette Molinaro <annette.molinaro@ucsf.edu>,
         Adam Olshen <olshena@biostat.ucsf.edu>,
         Karen Lostritto <karen.lostritto@yale.edu>, 
@@ -15,7 +15,7 @@ Description: A novel tool for generating a piecewise
 Depends: R (>= 2.5), survival
 Suggests: parallel, MASS, TH.data, VGAM
 License: GPL-2
-Packaged: 2015-02-18 23:14:51 UTC; molinaroa
+Packaged: 2017-01-04 18:44:19 UTC; annettemolinaro
 NeedsCompilation: no
 Repository: CRAN
-Date/Publication: 2015-02-19 00:22:46
+Date/Publication: 2017-01-05 10:39:59

@@ -229,6 +229,7 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
     predicted.values.by.tree.permuted <- lapply(tree.results,'[[',6)
     #For partial derivative importance, should be a list of p vectors
     partial.derivative.error <- lapply(tree.results,'[[',7)
+    partial.STEP.derivative.error.ALL <- lapply(tree.results,'[[',8)
     
     first.partition.with.var.on.average <- Reduce("+", first.partition.with.var.by.tree) /
                                            length(first.partition.with.var.by.tree)
@@ -239,6 +240,31 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
     var.penetrance.list <- as.list(variable.penetrance.on.average)
     partial.derivative.on.average <- Reduce("+", partial.derivative.error) / length(partial.derivative.error)
     partial.derivative.rank <- rank(-1*(partial.derivative.on.average),ties.method="min")
+    
+    partial.STEP.derivative.by.B <- partial.STEP.derivative.by.p.and.k <- partial.STEP.derivative.by.p <- vector("list",ncol(x))
+    num.unique.var.values <- rep(NA_real_,ncol(x)) # vector of length p - housing number of unique values for each variable
+    unique.var.values <- vector("list",ncol(x))   # list of length p of vectors - housing sorted unique values for each variable
+#	  diff.unique.var.values <- vector("list",ncol(x)) #list of length p of vectors - housing difference between ordered values of each variable
+
+    B<-length(partial.STEP.derivative.error.ALL)
+    p<-ncol(x)
+    for(j in 1:p){
+    	uniq.val.xin<-unique(x[,j])
+  	    #quant.uniq.val.xin<-ifelse(length(uniq.val.xin)>=10,quantile(uniq.val.xin,seq(0,1,.1)),uniq.val.xin)
+        if(length(uniq.val.xin)>=10 && !is.null(control$partial) && control$partial=="deciles") quant.uniq.val.xin <- quantile(uniq.val.xin,probs=seq(0,1,.1))
+        else quant.uniq.val.xin <- uniq.val.xin
+        unique.var.values[[j]] <- sort(quant.uniq.val.xin)
+        num.unique.var.values[j] <- length(unique.var.values[[j]])
+#  	    diff.unique.var.values[[j]] <- unique.var.values[[j]][2:num.unique.var.values[j]] - unique.var.values[[j]][1:(num.unique.var.values[j]-1)]
+        partial.STEP.derivative.by.B[[j]] <- matrix(NA_real_,B,num.unique.var.values[j]-1)
+        for(b in 1:B){
+            partial.STEP.derivative.by.B[[j]][b,]<-partial.STEP.derivative.error.ALL[[b]][[j]]
+        }
+        partial.STEP.derivative.by.p.and.k[[j]]<-apply(partial.STEP.derivative.by.B[[j]],2,sum)/B
+#        partial.STEP.derivative.by.p.and.k[[j]]<-((apply(partial.STEP.derivative.by.B[[j]],2,sum)/B)^2)*(diff.unique.var.values[[j]])        
+        partial.STEP.derivative.by.p[[j]] <- sum(partial.STEP.derivative.by.p.and.k[[j]])/(num.unique.var.values[j]-1)
+    }
+
     
     if (is.factor(y)) { #this is the categorical case
       categorical.results <- categorical.predictions(predicted.values.by.tree=predicted.values.by.tree,
@@ -292,53 +318,21 @@ partDSA <- function(x, y, wt=rep(1, nrow(x)), x.test=x, y.test=y, wt.test,
                       numerical.results[[5]][[2]],
                       numerical.results[[6]][[2]],
                       partial.derivative.on.average,
-                      partial.derivative.rank)
+                      partial.derivative.rank,
+                      unlist(partial.STEP.derivative.by.p),
+                      partial.STEP.derivative.by.p.and.k)
 
       names(results) <- list("Training.Set.Error", "Predicted.Training.Set.Values",
                              "Predicted.Test.Set.Values", "Test.Set.Error", "VIMP",
                              "Variable.Penetrance", "Prediction.Rules","Breiman.Training.Error",
-                             "Breiman.Rank","Partial.Derivative.Error","Partial.Derivative.Rank")
+                             "Breiman.Rank","Partial.Derivative.Error","Partial.Derivative.Rank","Partial.STEP.Derivative.Error","Partial.STEP.Derivative.by.Value")
     }
     class(results)<-('LeafyDSA')
   } else if(control$boost == 1 ){  #Start Boosting
-  	
-  		boost.num.trees<-control$boost.num.trees
-  		boost.out <- matrix(0,nrow=nrow(x),ncol=boost.num.trees)
-  		boost.models<-vector("list",boost.num.trees)
-  		resids.sum <- NULL
-  		resids<-y
-  		for(i in 1:boost.num.trees){
-  			boost.models[[i]]<-rss.dsa(x=x, y=resids, wt=wt, minsplit=minsplit, minbuck=minbuck,
-                        cut.off.growth=cut.off.growth, MPD=MPD,missing=missing,
-                        loss.function=loss.function, control=control,
-                        wt.method=wt.method, brier.vec=brier.vec, cox.vec=cox.vec, IBS.wt=IBS.wt)
-         boost.models[[i]]$pred.test.set.DSA <- predict(boost.models[[i]], x)
-			boost.out[,i]<-boost.models[[i]]$pred.test.set.DSA[,cut.off.growth]
-			resids <- (resids - boost.out[,i])
-			resids.sum[i] <- sum(resids^2)
-  		}
-  		### Predicted Values
-  		y.hat.train <- y - resids
-  		if(!is.null(x.test)){  # For future prediction
-  			y.hat.test<-rep(0,nrow=x.test)
-  			test.set.error <- NULL
-  			for(i in 1:boost.num.trees){
-  				 y.hat.test <- y.hat.test +  predict(boost.models[[i]], x.test)[,cut.off.growth]
-  				 test.set.error[i]<-sum((y.test - y.hat.test)^2)
-  			}
-  		}
-  	   results <- list(resids.sum,
-                      boost.models,
-                      y.hat.train,
-                      y.hat.test,
-                      test.set.error,
-                      test.set.error[boost.num.trees])
-
-      names(results) <- list("Training.Set.Errors", "Training.Set.Models", 
-      								 "Predicted.Train.Set.Values", 
-                             "Predicted.Test.Set.Values", "Test.Set.Errors", "Final.Test.Set.Error")
-      class(results)<-('BoostDSA')
-
+      run.cv <- cv.boosting(training.data=x,training.y=y,wt=wt,control=control)
+      control$cut.off.growth <- run.cv$boost.5part
+      control$boost.rounds <- run.cv$boost.5rounds
+      results <- run.boosting(x=x,y=y,wt=wt,x.test=x.test,y.test=y.test,control=control)
     } else {   # Begin partDSA
     # Only do cross validation if vfold > 1
     if (vfold > 1) {  #partDSA with cross-validation	

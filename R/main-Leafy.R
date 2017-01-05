@@ -14,8 +14,9 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
   }else{
     obs.in.bag <- sample(1:(dim(x.in)[1]),dim(x.in)[1],replace=TRUE)
   }
-
-  x<-data.frame(x.in[obs.in.bag,])
+  
+ # In bag sample
+  x<-data.frame(x.in[obs.in.bag,]) 
   y<-y.in[obs.in.bag]
   wt <- wt.in[obs.in.bag]
 
@@ -55,7 +56,7 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
   total.partitions.possible<- (ncol(ty$var.importance))*(ncol(ty$var.importance)+1)/2 - 1
   variable.penetrance <-mapply(rowappearance,list(ty$var.importance),1:nrow(ty$var.importance),SIMPLIFY=TRUE,USE.NAMES=FALSE)/total.partitions.possible
   
-  #If there are two many partitions, ty will not return null for the unused partitions, but will abruptly stop
+  #If there are too many partitions, ty will not return null for the unused partitions, but will abruptly stop
   #max growth gets the maximum possible partition for the tree              
   max.growth <- length(ty$coefficients)
 
@@ -70,13 +71,13 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
 
 #Add Breiman variable importance
 
-  n <- nrow(x.oob)
+  n.oob <- nrow(x.oob)
   p <- ncol(x.oob)
 
   pred.oob.DSA.permuted <- vector("list",p)
-  for(i in 1:p){
+  for(j in 1:p){
     x.oob.permuted <- x.oob
-    x.oob.permuted[,i] <- x.oob[sample(1:n),i]
+    x.oob.permuted[,j] <- x.oob[sample(1:n.oob),j]
     pred.oob.DSA.permute <- predict(ty, x.oob.permuted)
     if(is.factor(y)){
       pred.oob.DSA.permute <-pred.oob.DSA.permute[[max.growth]]
@@ -85,18 +86,18 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
     else{
       pred.oob.DSA.permute<-pred.oob.DSA.permute[,max.growth]
     }
-    pred.oob.DSA.permuted[[i]] <- pred.oob.DSA.permute
+    pred.oob.DSA.permuted[[j]] <- pred.oob.DSA.permute
   }
   
-#Add partial derivative variable importance
+#Add partial derivative variable importance ########################################
 
   pred.oob.DSA.sorted <- vector("list",p)
-  for(i in 1:p){
-    pred.oob.DSA.sorted[[i]] <- matrix(NA_real_,n,n)
+  for(j in 1:p){
+    pred.oob.DSA.sorted[[j]] <- matrix(NA_real_,n.oob,n.oob)
     x.oob.sorted <- x.oob
-    x.values <- sort(x.oob[,i])
-    for(j in 1:n){
-      x.oob.sorted[,i] <- x.values[j]
+    x.values <- sort(x.oob[,j])
+    for(i in 1:n.oob){
+      x.oob.sorted[,j] <- x.values[i]
       pred.oob.DSA.sort <- predict(ty, x.oob.sorted)
     if(is.factor(y)){
       pred.oob.DSA.sort <-pred.oob.DSA.sort[[max.growth]]
@@ -105,20 +106,70 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
     else{
       pred.oob.DSA.sort<-pred.oob.DSA.sort[,max.growth]
     }
-    pred.oob.DSA.sorted[[i]][,j] <- pred.oob.DSA.sort
+    pred.oob.DSA.sorted[[j]][,i] <- pred.oob.DSA.sort
     }
   }
-
+    
 #Here actually calculate the partial derivative errors   
 
   partial.derivative.error <- rep(0,p)
-  for(i in 1:p){
-    for(j in 1:(n-1)){
-      partial.derivative.error[i] <- partial.derivative.error[i]+sum((pred.oob.DSA.sorted[[i]][,(j+1)]-pred.oob.DSA.sorted[[i]][,j])^2)
+  for(j in 1:p){
+    for(i in 1:(n.oob-1)){
+      partial.derivative.error[j] <- partial.derivative.error[j]+sum((pred.oob.DSA.sorted[[j]][,(i+1)]-pred.oob.DSA.sorted[[j]][,i])^2)
     }
   }
-  partial.derivative.error <- partial.derivative.error/(n*(n-1))
+  partial.derivative.error <- partial.derivative.error/(n.oob*(n.oob-1))
+# Return partial derivative error ####################################################
   
+  
+  
+#Add UPDATED partial derivative variable importance ########################################
+
+  pred.oob.DSA.sorted <- vector("list",p) # list of length p - housing matrices - each matrix is n.oob by m_j  - HAVE NOT RENAMED this variable - will need to if need predicted values to be returned by function
+  num.unique.var.values <- rep(NA_real_,p) # vector of length p - housing number of unique values for each variable
+  unique.var.values <- vector("list",p)   # list of length p of vectors - housing sorted unique values for each variable
+#  diff.unique.var.values <- vector("list",p) #list of length p of vectors - housing difference between ordered values of each variable
+  for(j in 1:p){
+      uniq.val.xin<-unique(x.in[,j])
+      if(length(uniq.val.xin)>=10 && !is.null(control$partial) && control$partial=="deciles") quant.uniq.val.xin <- quantile(uniq.val.xin,probs=seq(0,1,.1))
+      else quant.uniq.val.xin <- uniq.val.xin
+#      quant.uniq.val.xin<-ifelse(length(uniq.val.xin)>=10,quantile(uniq.val.xin,probs=seq(0,1,.1)),uniq.val.xin)
+      unique.var.values[[j]] <- sort(quant.uniq.val.xin)
+  	num.unique.var.values[j] <- length(unique.var.values[[j]])
+#  	diff.unique.var.values[[j]] <- unique.var.values[[j]][2:num.unique.var.values[j]] - unique.var.values[[j]][1:(num.unique.var.values[j]-1)]
+  }  
+  for(j in 1:p){
+    pred.oob.DSA.sorted[[j]] <- matrix(NA_real_,n.oob,num.unique.var.values[j])
+    x.oob.sorted <- x.oob
+    for(k in 1:num.unique.var.values[j]){
+      x.oob.sorted[,j] <- unique.var.values[[j]][k]
+      pred.oob.DSA.sort <- predict(ty, x.oob.sorted)
+    if(is.factor(y)){
+      pred.oob.DSA.sort <-pred.oob.DSA.sort[[max.growth]]
+      pred.oob.DSA.sort<- as.numeric(levels(pred.oob.DSA.sort))[as.integer(pred.oob.DSA.sort)]
+    }
+    else{
+      pred.oob.DSA.sort<-pred.oob.DSA.sort[,max.growth]
+    }
+    pred.oob.DSA.sorted[[j]][,k] <- pred.oob.DSA.sort
+    }
+  }
+        
+  partial.STEP.derivative.error <- vector("list",p) # vector of length p - housing error for each value of each variable
+  
+  for(j in 1:p){
+    partial.STEP.derivative.error[[j]]<- rep(NA_real_,num.unique.var.values[j]-1)
+    for(k in 1:(num.unique.var.values[j]-1)){
+        partial.STEP.derivative.error[[j]][k] <- sum((pred.oob.DSA.sorted[[j]][,(k+1)]-pred.oob.DSA.sorted[[j]][,k])^2)/n.oob
+#      partial.STEP.derivative.error[[j]][k] <- (sum(pred.oob.DSA.sorted[[j]][,(k+1)]-pred.oob.DSA.sorted[[j]][,k]))/(n.oob*diff.unique.var.values[[j]][k])        
+    }
+  }
+
+# Return partial STEP derivative error is a list of length p - each element of which is a vector of length m_j
+####################################################
+
+  
+ #
   if(!identical(x.in, x.test.in)){
   	pred.test.set.DSA <- predict(ty, x.test.in)
   	}
@@ -158,7 +209,7 @@ worker.leafy <- function(tree.num, minsplit, minbuck, cut.off.growth, MPD, missi
     tree.test.set.pred.values[1:dim(x.test.in)[1],]<-pred.test.set.DSA
   }
 
-  list(tree.oob.pred.values,ty,tree.test.set.pred.values,first.partition.with.var,variable.penetrance,tree.oob.pred.values.permuted,partial.derivative.error)
+  list(tree.oob.pred.values,ty,tree.test.set.pred.values,first.partition.with.var,variable.penetrance,tree.oob.pred.values.permuted,partial.derivative.error,partial.STEP.derivative.error)
 }
 
 print.LeafyDSA<-function(x, ...){
